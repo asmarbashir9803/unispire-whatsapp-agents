@@ -41,6 +41,13 @@ function leadPhone(lead: Record<string, any>) {
   return d.whatsapp ?? d.phone ?? (String(lead.chat_id).endsWith("@lid") ? "number not known" : `+${digits(lead.chat_id)}`);
 }
 
+/** Lead details as short readable lines for staff alerts. */
+function fmtDetails(json: string) {
+  const d = JSON.parse(json ?? "{}");
+  return Object.entries(d).filter(([k, v]) => v !== "" && v != null && !["interested", "followup_note", "notes"].includes(k))
+    .map(([k, v]) => `- ${k.replace(/_/g, " ")}: ${v}`).join("\n") || "- nothing yet";
+}
+
 function ensureLead(chatId: string, name?: string) {
   run("INSERT OR IGNORE INTO leads (chat_id, name, created_ts) VALUES (?,?,?)", chatId, name ?? null, now());
   if (name) run("UPDATE leads SET name=coalesce(name, ?) WHERE chat_id=?", name, chatId);
@@ -116,7 +123,7 @@ const salesPrompt = () => `You are ${config.sales.agentName}, the AI sales assis
 How to work a conversation
 - Most people reach you after filling in the company's enquiry form; their first message then lists their answers. Open by telling them the team received their enquiry to start their business setup in the UAE, and use what the form already says instead of asking again.
 - The team prices each setup from four facts, so your first aim is to collect whichever of these are missing or vague: the client's nationality, whether they need UAE visas and how many, which business activity they will run (a form answer of "Other" or a broad word like "Trading" needs one follow-up to pin down), and free zone or mainland. Tell them briefly that these let the team prepare an accurate price. Ask one thing at a time.
-- As soon as the client replies positively or engages with your questions, call mark_interested. Once you have nationality, visas, activity and setup type, use handoff with a summary so a consultant can send the pricing, and tell the client the pricing is being prepared.
+- Filling in the form is not yet interest. When the client answers your first message positively or starts giving you the details you asked for, call mark_interested. Someone who says they are not interested, was only browsing, or does not reply is never marked. Once you have nationality, visas, activity and setup type, use handoff with a summary so a consultant can send the pricing, and tell the client the pricing is being prepared.
 - Answer questions from the company information below. That section is the only source for prices, timelines, package contents and promises. If the answer is not there, say a consultant will confirm it and offer to arrange that; a wrong figure costs the company a client's trust and can create a commitment it cannot keep.
 - Government approvals, bank account opening and visa outcomes are decided by the authorities. Describe the usual process; never guarantee an outcome or a date.
 - When someone goes quiet, your follow-ups should add something (an answer to an open question, a next step, a useful fact), not just ask whether they are still interested.
@@ -156,7 +163,7 @@ function salesTools(chatId: string, state: { followupSet: boolean }): ToolSpec[]
     }),
     tool({
       name: "mark_interested",
-      description: "Put this client on the company's Interested Customers list in WhatsApp and tell the team. Call it once, the first time the client shows real interest: a positive reply, answering your questions, or asking about price or next steps. Not for people who say they are not interested or who wrote by mistake.",
+      description: "Put this client on the company's Interested Customers list in WhatsApp and tell the team. Call it once, when the client replies to you and shows real interest: a positive reply, answering your questions, or asking about price or next steps. Do not call it for the form message alone, or for people who say they are not interested or who wrote by mistake.",
       schema: z.object({ why: z.string().describe("One line: what the client said that shows interest") }),
       run: async ({ why }) => {
         const lead = get("SELECT * FROM leads WHERE chat_id=?", chatId)!;
@@ -164,7 +171,7 @@ function salesTools(chatId: string, state: { followupSet: boolean }): ToolSpec[]
         run("UPDATE leads SET details=json_set(details, '$.interested', json('true')) WHERE chat_id=?", chatId);
         const label = config.sales.interestedLabel ?? "Interested Customers";
         const labelled = await addLabel("sales", chatId, label);
-        await notifyStaff(`⭐ *Interested client*: ${lead.name ?? "Client"} (${leadPhone(lead)})\n${why}\nKnown so far: ${lead.details}${labelled ? "" : `\n(Could not add the "${label}" label in WhatsApp; please add it by hand.)`}`);
+        await notifyStaff(`⭐ *Interested client*: ${lead.name ?? "Client"} (${leadPhone(lead)})\n${why}\n${fmtDetails(lead.details)}${labelled ? "" : `\n(Could not add the "${label}" label in WhatsApp; please add it by hand.)`}`);
         return labelled ? "Added to the interested list; the team has been told." : "The team has been told, but the WhatsApp label could not be added.";
       },
     }),
@@ -186,7 +193,7 @@ function salesTools(chatId: string, state: { followupSet: boolean }): ToolSpec[]
       run: async ({ reason, summary }) => {
         const lead = get("SELECT * FROM leads WHERE chat_id=?", chatId)!;
         run("UPDATE leads SET status='handoff', next_followup_ts=NULL WHERE chat_id=?", chatId);
-        await notifyStaff(`🤝 *Sales handover*: ${lead.name ?? "Client"} (${leadPhone(lead)})\nWhy: ${reason}\n${summary}\nDetails: ${lead.details}\n\nReply to them from the sales number; the agent has stopped in that chat.`);
+        await notifyStaff(`🤝 *Sales handover*: ${lead.name ?? "Client"} (${leadPhone(lead)})\nWhy: ${reason}\n${summary}\n\nReply to them from the sales number; the agent has stopped in that chat.`);
         return `Handed over. ${config.sales.handoffTo} has been notified.`;
       },
     }),
