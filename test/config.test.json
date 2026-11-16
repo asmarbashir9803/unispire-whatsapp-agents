@@ -6,6 +6,6 @@
     { "name": "Ali", "phone": "971500000002", "role": "PRO" },
     { "name": "Sana", "phone": "971500000003", "role": "Sales" }
   ],
-  "ops": { "replySlaMinutes": 0, "escalateAfterMinutes": 0, "nudgeWhere": "dm", "teamGroupId": "", "digestTime": "00:00", "defaultAssignee": "Ali" },
+  "ops": { "monitorGroups": "all", "replySlaMinutes": 0, "escalateAfterMinutes": 0, "nudgeWhere": "dm", "teamGroupId": "", "digestTime": "00:00", "defaultAssignee": "Ali" },
   "sales": { "agentName": "Sara", "handoffTo": "Sana", "followUpDays": [1, 3, 7], "humanTakeoverHours": 12 }
 }

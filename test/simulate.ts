@@ -82,6 +82,16 @@ check("owner private message gets an answer", sent(OWNER, /FAKE_REPLY/));
 const b2 = outbox.length;
 await enqueue("ops", msg({ chatId: "447700900009@s.whatsapp.net", from: "447700900009", body: "hello who is this" }));
 check("strangers messaging the ops number are ignored", outbox.length === b2);
+const b7 = outbox.length;
+await enqueue("ops", msg({ chatId: `${OWNER}@s.whatsapp.net`, from: OWNER, fromMe: true, source: "mobile", body: "who is waiting?" }));
+check("owner can command the agent from their own 'message yourself' chat", outbox.length === b7 + 1 && outbox.at(-1)!.to.startsWith(OWNER));
+const { config: cfg } = await import("../src/config.ts");
+cfg.ops.monitorGroups = ["Acme", G2];
+await enqueue("ops", msg({ chatId: "120363000000000077@g.us", chatName: "La familia", from: "447700900077", body: "dinner at 8?" }));
+check("groups outside the watch list are not stored or tracked", !get("SELECT 1 x FROM messages WHERE chat_id='120363000000000077@g.us'") && !get("SELECT 1 x FROM pending WHERE chat_id='120363000000000077@g.us'"));
+await enqueue("ops", msg({ chatId: G1, chatName: "Acme LLC setup", from: ALI, body: "On it" }));
+check("watched group (matched by name) is still stored", get("SELECT 1 x FROM messages WHERE body='On it'"));
+cfg.ops.monitorGroups = "all";
 await ops.dailyDigest(true);
 check("daily summary sent to owner", sent(OWNER, /Daily summary/));
 

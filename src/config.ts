@@ -22,6 +22,8 @@ export interface Config {
   owner: Member;
   team: Member[];
   ops: {
+    /** Which groups to watch: "all", or a list of group ids / parts of group names. Messages in other groups are not stored. */
+    monitorGroups: "all" | string[];
     replySlaMinutes: number;
     escalateAfterMinutes: number;
     /** Where the "client is waiting" nudge goes: private message, internal team group, or the customer group itself. */
@@ -83,6 +85,13 @@ export function memberByName(name: string): Member | undefined {
   return people().find((m) => m.name.toLowerCase() === n) ?? people().find((m) => m.name.toLowerCase().includes(n));
 }
 export const isOwner = (id: string) => memberById(id) === config.owner;
+
+export function isMonitoredGroup(chatId: string, name: string) {
+  const list = config.ops.monitorGroups ?? "all";
+  if (list === "all") return true;
+  const n = name.toLowerCase();
+  return list.some((x) => x === chatId || (!x.endsWith("@g.us") && n !== "" && n.includes(x.toLowerCase())));
+}
 
 // ---- time helpers (all in the configured timezone) ----
 function local(d = new Date()) {

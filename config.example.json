@@ -6,7 +6,7 @@
     { "name": "Ali", "phone": "9715XXXXXXXX", "role": "PRO / documents" },
     { "name": "Sana", "phone": "9715XXXXXXXX", "role": "Sales consultant" }
   ],
-  "ops": {
+  "ops": { "monitorGroups": "all",
     "replySlaMinutes": 30,
     "escalateAfterMinutes": 90,
     "nudgeWhere": "dm",

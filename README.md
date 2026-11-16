@@ -37,11 +37,14 @@ Start with `DRY_RUN=1` in `.env` to watch what it would send (in the logs) befor
   - "What's happening with Acme?" / "Who is waiting for a reply?"
   - "Ask Ali to send the trade licence draft to Acme by tomorrow"
   - "Make Sana responsible for the Beta FZ group"
+- **If the ops number is your own number**, write your instructions in WhatsApp's "message yourself" chat instead.
 - **Team members** reply to the ops number privately: "task 4 is done, sent by email". You are told straight away.
 - **To take over a sales chat**, just reply from the sales phone. The agent goes quiet in that chat for
   `humanTakeoverHours`. After a handover it stays out until you change the lead's status.
 
 ## Settings (`config.json`)
+- `ops.monitorGroups`: `"all"`, or a list of group ids or parts of group names. Only these groups are watched;
+  messages in any other group are ignored and not stored. Use a list when the number is also in personal or internal groups.
 - `ops.replySlaMinutes`: how long a client may wait (in working hours) before the team member is reminded.
 - `ops.escalateAfterMinutes`: when you are alerted if there is still no reply.
 - `ops.nudgeWhere`: `dm` (private reminder, default), `team_group` (your internal team group, set `teamGroupId`),

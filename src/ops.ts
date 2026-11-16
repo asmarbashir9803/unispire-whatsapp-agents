@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import {
-  config, digits, inWorkingHours, isOwner, localDate, localTime, memberById, memberByName, now, nowText, workStartToday,
+  config, digits, inWorkingHours, isMonitoredGroup, isOwner, localDate, localTime, memberById, memberByName, now, nowText, workStartToday,
   type Member,
 } from "./config.ts";
 import { all, createTask, findGroup, get, kvGet, kvSet, recent, run, saveMessage, transcript } from "./db.ts";
@@ -20,6 +20,7 @@ export async function handleOps(m: Incoming, live: boolean) {
   const member = memberById(m.from);
 
   if (m.isGroup) {
+    if (m.chatId !== config.ops.teamGroupId && !isMonitoredGroup(m.chatId, m.chatName)) return; // not a watched group: keep nothing
     // Anything typed by a known team number, or by a person using the ops phone itself, counts as a team reply.
     const role = m.fromMe || member ? "team" : "customer";
     run("INSERT INTO groups (chat_id, name) VALUES (?,?) ON CONFLICT(chat_id) DO UPDATE SET name=CASE WHEN excluded.name<>'' THEN excluded.name ELSE name END",
@@ -32,17 +33,20 @@ export async function handleOps(m: Incoming, live: boolean) {
   }
 
   // Private messages: only the owner and team members may talk to the agent.
-  if (m.fromMe || !member) return;
-  const fresh = saveMessage({ id: m.id, channel: "ops", chat_id: m.chatId, sender: digits(m.from), sender_name: member.name, role: "team", body: m.body, ts: m.ts });
+  // When the agent runs on the owner's own number, the owner talks to it in their "message yourself" chat.
+  const selfChat = m.fromMe && digits(m.chatId) === digits(config.owner.phone);
+  const who = selfChat ? config.owner : m.fromMe ? undefined : member;
+  if (!who) return;
+  const fresh = saveMessage({ id: m.id, channel: "ops", chat_id: m.chatId, sender: digits(who.phone), sender_name: who.name, role: "team", body: m.body, ts: m.ts });
   if (!fresh || !live) return;
 
-  const owner = isOwner(m.from);
+  const owner = who === config.owner;
   const turns: Turn[] = recent("ops", m.chatId, 20).map((x) => ({ role: x.role === "bot" ? "assistant" : "user", content: x.body }));
   while (turns.length && turns[0].role === "assistant") turns.shift();
   const reply = await runAgent({
-    system: owner ? ownerPrompt() : teamPrompt(member),
+    system: owner ? ownerPrompt() : teamPrompt(who),
     turns,
-    tools: owner ? ownerTools() : teamTools(member),
+    tools: owner ? ownerTools() : teamTools(who),
   });
   if (reply) await trySend("ops", m.chatId, reply);
 }
