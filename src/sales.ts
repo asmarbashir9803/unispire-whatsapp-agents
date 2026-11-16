@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { config, digits, env, inWorkingHours, knowledge, memberByName, normalisePhone, now, nowText } from "./config.ts";
-import { all, get, recent, run, saveMessage } from "./db.ts";
+import { all, get, kvGet, recent, run, saveMessage } from "./db.ts";
 import { runAgent, tool, type ToolSpec, type Turn } from "./llm.ts";
 import { addLabel, channelReady, toChatId, trySend, type Incoming } from "./whapi.ts";
 
@@ -72,6 +72,8 @@ export async function handleSales(m: Incoming, live: boolean) {
     if (!form) return;
     ensureLead(m.chatId, form.name || m.fromName || undefined);
     run("UPDATE leads SET details=json_patch(details, ?) WHERE chat_id=?", JSON.stringify(form.details), m.chatId);
+    // With auto-reply off the enquiry just waits (no AI used) until the owner asks to contact this person.
+    if (kvGet("sales_auto") === "off") run("UPDATE leads SET status='waiting' WHERE chat_id=?", m.chatId);
   }
 
   if (m.fromMe) {
@@ -86,7 +88,7 @@ export async function handleSales(m: Incoming, live: boolean) {
   if (!saveMessage({ id: m.id, channel: "sales", chat_id: m.chatId, sender: digits(m.from), sender_name: m.fromName, role: "customer", body: m.body, ts: m.ts })) return;
   const lead = ensureLead(m.chatId, m.fromName || undefined);
   run("UPDATE leads SET last_in_ts=?, followups_sent=0 WHERE chat_id=?", m.ts, m.chatId);
-  if (!live || lead.status === "stopped") return;
+  if (!live || lead.status === "stopped" || lead.status === "waiting") return;
   if (lead.status === "handoff") {
     await notifyStaff(`💬 ${lead.name ?? leadPhone(lead)} (handed over to you) wrote on the sales number:\n"${m.body.slice(0, 500)}"`);
     return;
@@ -221,7 +223,7 @@ export async function replyToLead(chatId: string, internalNote?: string) {
   if (turns.at(-1)!.role !== "user") return; // nothing new to answer
 
   const state = { followupSet: false };
-  const reply = await runAgent({ system: salesPrompt(), turns, tools: salesTools(chatId, state) });
+  const reply = await runAgent({ purpose: "sales chat", effort: "low", system: salesPrompt(), turns, tools: salesTools(chatId, state) });
   if (reply && !(await trySend("sales", chatId, reply))) return;
 
   const after = get("SELECT * FROM leads WHERE chat_id=?", chatId)!;
@@ -252,7 +254,12 @@ export async function contactLead(input: { phone: string; name?: string; about?:
   const phone = normalisePhone(input.phone);
   if (!phone) return `"${input.phone}" is not a valid phone number. Include the country code.`;
   if (!channelReady("sales")) return "The sales WhatsApp number is not connected.";
-  const chatId = toChatId(phone);
+  // A form enquiry that is waiting may sit under WhatsApp's private chat id; find it by the number given in the form.
+  const waiting = all("SELECT chat_id, details FROM leads WHERE status='waiting'").find((l) => {
+    const d = JSON.parse(l.details);
+    return [d.whatsapp, d.phone].some((x) => x && normalisePhone(x) === phone);
+  });
+  const chatId = waiting?.chat_id ?? toChatId(phone);
   const lead = ensureLead(chatId, input.name);
   if (lead.status === "stopped") return `+${phone} asked not to be contacted, so nothing was sent.`;
   if (input.about) run("UPDATE leads SET details=json_patch(details, ?) WHERE chat_id=?", JSON.stringify({ source: "added by owner", enquiry: input.about }), chatId);

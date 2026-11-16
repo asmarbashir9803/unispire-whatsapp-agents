@@ -163,6 +163,15 @@ check("form answers are saved on the lead", fl?.name === "Bashir Ahmed" && fd.vi
 const AR = "مرحبًا! لقد قمتُ بملء النموذج الخاص بك\n\nHow many UAE visas do you require?: 1 Visa\nWhich business activity are you planning to start?: Other\nPhone number: +971500002222\nFirst name: Mohamed";
 check("form is recognised when the intro is in Arabic", sales.parseLeadForm(AR)?.details.business_activity === "Other");
 check("ordinary messages are not mistaken for a form", sales.parseLeadForm("Hi, my name: Ali. Call me") === null && sales.parseLeadForm("Hello Good Afternoon") === null);
+await tools(ops.ownerTools(), "set_sales_auto_reply").run({ on: false });
+const L3 = "111122223333@lid", b11 = outbox.length;
+await enqueue("sales", msg({ chatId: L3, from: L3, fromName: "Wait Person", body: FORM.replace(/\+971500001111/g, "+971500003333") }));
+check("auto-reply off: a form enquiry is saved as waiting and not answered", outbox.length === b11 && get("SELECT status FROM leads WHERE chat_id=?", L3)?.status === "waiting");
+check("waiting lead appears in list_leads", /\[waiting\]/.test(await tools(ops.ownerTools(), "list_leads").run({})));
+await tools(ops.ownerTools(), "contact_client").run({ phone: "+971500003333" });
+check("owner starts a waiting lead by its form number: reply goes to that same chat", outbox.at(-1)!.to === L3 && get("SELECT status FROM leads WHERE chat_id=?", L3)?.status === "active");
+await tools(ops.ownerTools(), "set_sales_auto_reply").run({ on: true });
+check("ai_usage reports calls and the daily limit", /Today: \$0\.00 of \$5 daily limit[\s\S]*sales chat: \d+ calls/.test(await tools(ops.ownerTools(), "ai_usage").run({})));
 cfg.sales.replyTo = "everyone";
 
 // ---- website enquiry ----

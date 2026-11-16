@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS leads (
   next_followup_ts INTEGER, last_in_ts INTEGER, last_out_ts INTEGER, created_ts INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS usage (  -- one row per Claude API call
+  ts INTEGER NOT NULL, day TEXT NOT NULL, purpose TEXT NOT NULL, model TEXT NOT NULL,
+  input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, cost_usd REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS usage_day ON usage (day);
 `);
 
 export type Row = Record<string, any>;

@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import {
-  config, digits, inWorkingHours, isMonitoredGroup, isOwner, localDate, localTime, memberById, memberByName, now, nowText, workStartToday,
+  config, digits, env, inWorkingHours, isMonitoredGroup, isOwner, localDate, localTime, memberById, memberByName, now, nowText, workStartToday,
   type Member,
 } from "./config.ts";
 import { all, createTask, findGroup, get, kvGet, kvSet, recent, run, saveMessage, transcript } from "./db.ts";
@@ -51,6 +51,8 @@ export async function handleOps(m: Incoming, live: boolean) {
   const turns: Turn[] = recent("ops", m.chatId, 20).map((x) => ({ role: x.role === "bot" ? "assistant" : "user", content: x.body }));
   while (turns.length && turns[0].role === "assistant") turns.shift();
   const reply = await runAgent({
+    purpose: owner ? "owner chat" : "staff chat",
+    effort: owner ? "medium" : "low",
     system: owner ? ownerPrompt() : teamPrompt(who),
     turns,
     tools: owner ? ownerTools() : teamTools(who),
@@ -194,6 +196,23 @@ export function ownerTools(): ToolSpec[] {
       run: ({ phone }) => transcript(recent("sales", `${digits(phone)}@s.whatsapp.net`, 60)) || "No conversation stored for that number.",
     }),
     tool({
+      name: "ai_usage",
+      description: "Report what the agents have spent on AI: today against the daily limit, and the last 7 days broken down by what the AI was used for.",
+      schema: z.object({}),
+      run: () => {
+        const today = all("SELECT purpose, count(*) calls, sum(cost_usd) cost FROM usage WHERE day=? GROUP BY purpose ORDER BY cost DESC", localDate());
+        const week = all("SELECT day, count(*) calls, sum(cost_usd) cost FROM usage WHERE ts>=? GROUP BY day ORDER BY day DESC", now() - 7 * 86400);
+        const sum = today.reduce((a, r) => a + r.cost, 0);
+        return `Today: $${sum.toFixed(2)}${env.dailyBudgetUsd > 0 ? ` of $${env.dailyBudgetUsd} daily limit` : " (no limit set)"}\n${today.map((r) => `- ${r.purpose}: ${r.calls} calls, $${r.cost.toFixed(2)}`).join("\n") || "- nothing yet"}\n\nLast 7 days:\n${week.map((r) => `- ${r.day}: ${r.calls} calls, $${r.cost.toFixed(2)}`).join("\n") || "- nothing yet"}\nModel: ${env.model}. Sales auto-reply: ${kvGet("sales_auto") === "off" ? "OFF" : "ON"}.`;
+      },
+    }),
+    tool({
+      name: "set_sales_auto_reply",
+      description: "Turn the sales agent's automatic replies to new form enquiries on or off. When off, new enquiries are saved as waiting leads without using AI, and the agent only starts a chat when the owner asks with contact_client. Chats already in progress continue either way.",
+      schema: z.object({ on: z.boolean() }),
+      run: ({ on }) => { kvSet("sales_auto", on ? "on" : "off"); return `Sales auto-reply is now ${on ? "ON: new form enquiries are answered automatically" : "OFF: new form enquiries wait until the owner asks to contact them"}.`; },
+    }),
+    tool({
       name: "set_group_responsible",
       description: "Set which team member is responsible for a customer group. Late-reply nudges for that group go to them.",
       schema: z.object({ group: z.string(), member: z.string() }),
@@ -315,7 +334,8 @@ export async function dailyDigest(force = false) {
   if (!sections.length && !waiting.length && !tasks.length) return;
 
   const summary = await runAgent({
-    effort: "medium",
+    purpose: "daily summary",
+    effort: "low",
     system: `You write the end-of-day WhatsApp summary for ${config.owner.name}, who runs a UAE business-setup consultancy. Below are the last 24 hours of messages from customer groups (TEAM = staff, CUSTOMER = client), plus open items.
 
 Lead with what needs ${config.owner.name}'s attention: clients still waiting, unhappy clients, promises made with deadlines, payments or documents outstanding. Then one line per active group on where it stands. Skip groups where nothing notable happened. Keep it readable on a phone: WhatsApp formatting only (*bold*, "-" lists), no headings, under 250 words unless there is genuinely more that matters. State only what the messages show.`,

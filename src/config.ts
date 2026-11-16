@@ -54,6 +54,10 @@ export const env = {
   port: Number(process.env.PORT || 8787),
   dbPath: process.env.DB_PATH || path.join(ROOT, "data.sqlite"),
   model: process.env.CLAUDE_MODEL || "claude-opus-5-5",
+  /** Model for the small yes/no check on unanswered group messages. Defaults to the main model. */
+  lightModel: process.env.CLAUDE_MODEL_LIGHT || process.env.CLAUDE_MODEL || "claude-opus-5-5",
+  /** The agents stop calling Claude for the rest of the day once this much has been spent. 0 = no limit. */
+  dailyBudgetUsd: Number(process.env.AI_DAILY_BUDGET_USD ?? 5),
   opsToken: process.env.WHAPI_OPS_TOKEN || "",
   salesToken: process.env.WHAPI_SALES_TOKEN || "",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
