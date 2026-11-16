@@ -15,6 +15,10 @@ import { trySend, type Incoming } from "./whapi.ts";
 
 const mins = (s: number) => Math.max(1, Math.round(s / 60));
 
+/** Messages to staff are signed, so nobody mistakes an automated message for the owner typing (the agent may run on the owner's own number). */
+const signature = () => `\n\n— ${config.owner.name}'s AI assistant`;
+const toStaff = (phone: string, text: string) => trySend("ops", phone, text + signature());
+
 export async function handleOps(m: Incoming, live: boolean) {
   if (m.fromMe && m.source === "api") return; // our own sends echoed back
   const member = memberById(m.from);
@@ -35,8 +39,10 @@ export async function handleOps(m: Incoming, live: boolean) {
   // Private messages: only the owner and team members may talk to the agent.
   // When the agent runs on the owner's own number, the owner talks to it in their "message yourself" chat.
   const selfChat = m.fromMe && digits(m.chatId) === digits(config.owner.phone);
-  const who = selfChat ? config.owner : m.fromMe ? undefined : member;
+  const who = selfChat ? config.owner : m.fromMe ? undefined : member ?? memberById(m.chatId);
   if (!who) return;
+  // Staff chats with the owner's number are private unless the agent is following something up with that person.
+  if (who !== config.owner && !get("SELECT 1 x FROM tasks WHERE assignee=? AND status<>'done' AND pings>=0 LIMIT 1", who.name)) return;
   const fresh = saveMessage({ id: m.id, channel: "ops", chat_id: m.chatId, sender: digits(who.phone), sender_name: who.name, role: "team", body: m.body, ts: m.ts });
   if (!fresh || !live) return;
 
@@ -48,7 +54,7 @@ export async function handleOps(m: Incoming, live: boolean) {
     turns,
     tools: owner ? ownerTools() : teamTools(who),
   });
-  if (reply) await trySend("ops", m.chatId, reply);
+  if (reply) await (owner ? trySend("ops", m.chatId, reply) : toStaff(m.chatId, reply));
 }
 
 // ---------- prompts ----------
@@ -76,6 +82,11 @@ Help ${m.name} with their tasks: show what is open, and record updates when they
 Be brief and friendly, like a colleague on WhatsApp. Reply in the language ${m.name} writes in. Current time: ${nowText()}.`;
 
 // ---------- tools ----------
+
+function taskMessage(t: Record<string, any>) {
+  const hours = t.due_ts ? Math.max(1, Math.round((t.due_ts - now()) / 3600)) : 0;
+  return `📌 Task from ${config.owner.name} (#${t.id})\n${t.text}${t.group_name ? `\nGroup: ${t.group_name}` : ""}${hours ? `\nDue in ${hours >= 24 ? `${Math.round(hours / 24)} day(s)` : `${hours} hour(s)`}` : ""}\n\nReply here when it is done.`;
+}
 
 function describeTask(t: Record<string, any>) {
   const due = t.due_ts ? `, due ${new Date(t.due_ts * 1000).toISOString().slice(0, 16).replace("T", " ")}Z` : "";
@@ -122,14 +133,18 @@ export function ownerTools(): ToolSpec[] {
         text: z.string().describe("What needs to be done, written so the assignee understands it without other context"),
         due_in_hours: z.number().positive().optional().describe("Hours from now until it is due. Omit if no deadline was given."),
         group: z.string().optional().describe("Related customer group name, if any"),
+        send_now: z.boolean().optional().describe("Outside office hours the task message waits until the office opens. Set true only if the owner asks for it to go immediately."),
       }),
-      run: async ({ assignee, text, due_in_hours, group }) => {
+      run: async ({ assignee, text, due_in_hours, group, send_now }) => {
         const m = memberByName(assignee);
         if (!m || m === config.owner) return `No team member called "${assignee}". Team: ${config.team.map((t) => t.name).join(", ")}`;
         const g = group ? findGroup(group) : undefined;
         const id = createTask(m.name, text, due_in_hours ? now() + Math.round(due_in_hours * 3600) : null, g?.name ?? group ?? null);
-        const sent = await trySend("ops", m.phone,
-          `📌 Task from ${config.owner.name} (#${id})\n${text}${g ? `\nGroup: ${g.name}` : ""}${due_in_hours ? `\nDue in ${due_in_hours >= 24 ? `${Math.round(due_in_hours / 24)} day(s)` : `${due_in_hours} hour(s)`}` : ""}\n\nReply here when it is done.`);
+        if (!send_now && !inWorkingHours()) {
+          run("UPDATE tasks SET pings=-1, next_ping_ts=? WHERE id=?", now(), id); // announced by checkTasks when the office opens
+          return `Task #${id} created for ${m.name}. It is outside office hours, so they will be messaged when the office opens (${config.workingHours.start}).`;
+        }
+        const sent = await toStaff(m.phone, taskMessage({ id, text, group_name: g?.name ?? null, due_ts: due_in_hours ? now() + Math.round(due_in_hours * 3600) : null }));
         return `Task #${id} created for ${m.name}. ${sent ? "They have been messaged." : "Could NOT message them on WhatsApp; tell the owner."}`;
       },
     }),
@@ -149,7 +164,7 @@ export function ownerTools(): ToolSpec[] {
       run: async ({ member, text }) => {
         const m = memberByName(member);
         if (!m || m === config.owner) return `No team member called "${member}".`;
-        return (await trySend("ops", m.phone, text)) ? `Sent to ${m.name}.` : `Could not send to ${m.name}.`;
+        return (await toStaff(m.phone, text)) ? `Sent to ${m.name}.` : `Could not send to ${m.name}.`;
       },
     }),
     tool({
@@ -226,7 +241,8 @@ export async function checkPending() {
       const where = config.ops.nudgeWhere;
       if (where === "customer_group") await trySend("ops", p.chat_id, `@${digits(who.phone)} please respond here.`, [digits(who.phone)]);
       else if (where === "team_group" && config.ops.teamGroupId) await trySend("ops", config.ops.teamGroupId, `${text}\n@${digits(who.phone)} please reply in the group.`, [digits(who.phone)]);
-      else await trySend("ops", who.phone, `${text}\nPlease reply in the group.`);
+      else if (who === config.owner) await trySend("ops", who.phone, `${text}\nNo team member is assigned to this group.`);
+      else await toStaff(who.phone, `${text}\nPlease reply in the group.`);
       run("UPDATE pending SET nudged_at=? WHERE chat_id=?", t, p.chat_id);
     } else if (!p.escalated_at && waited >= config.ops.escalateAfterMinutes * 60 && who !== config.owner) {
       await trySend("ops", config.owner.phone, `🚨 *${p.name}*: still no reply after ${mins(waited)} min (${who.name} was reminded).\n"${p.summary}"`);
@@ -241,7 +257,12 @@ export async function checkTasks() {
   const t = now();
   for (const task of all("SELECT * FROM tasks WHERE status<>'done' AND next_ping_ts<=?", t)) {
     const m = memberByName(task.assignee);
-    if (m) await trySend("ops", m.phone, `🔔 Reminder, task #${task.id}${task.status === "blocked" ? " (blocked)" : ""}:\n${task.text}\n\nReply here with an update.`);
+    if (task.pings < 0) { // created outside office hours: this is the first message about it
+      if (m) await toStaff(m.phone, taskMessage(task));
+      run("UPDATE tasks SET pings=0, next_ping_ts=? WHERE id=?", task.due_ts ?? t + 4 * 3600, task.id);
+      continue;
+    }
+    if (m) await toStaff(m.phone, `🔔 Reminder, task #${task.id}${task.status === "blocked" ? " (blocked)" : ""}:\n${task.text}\n\nReply here with an update.`);
     run("UPDATE tasks SET pings=pings+1, next_ping_ts=? WHERE id=?", t + 24 * 3600, task.id);
     if (task.pings + 1 === 2) await trySend("ops", config.owner.phone, `⚠️ Task #${task.id} for ${task.assignee} is still ${task.status} after two reminders:\n${task.text}`);
   }

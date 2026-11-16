@@ -77,6 +77,13 @@ await tools(tt, "update_my_task").run({ id: 1, status: "done", note: "Sent by em
 check("team marks task done: owner informed", get("SELECT status FROM tasks WHERE id=1")?.status === "done" && sent(OWNER, /Ali: task #1 done.*Sent by email/s));
 check("team member cannot touch someone else's task", /not one of/.test(await tools(ops.teamTools({ name: "Sana", phone: SANA }), "update_my_task").run({ id: 1, status: "done" })));
 
+check("messages to staff are signed as the assistant", outbox.filter((o) => o.to.startsWith(ALI)).every((o) => /Boss's AI assistant$/.test(o.body)));
+const b8 = outbox.length;
+await enqueue("ops", msg({ chatId: `${SANA}@s.whatsapp.net`, from: SANA, body: "boss are you coming to the office?" }));
+check("staff chat with no open follow-up is left alone and not stored", outbox.length === b8 && !get("SELECT 1 x FROM messages WHERE body LIKE 'boss are you%'"));
+await tools(ot, "create_task").run({ assignee: "Sana", text: "Confirm salary is processed", send_now: true });
+await enqueue("ops", msg({ chatId: `${SANA}@s.whatsapp.net`, from: SANA, body: "yes processed today" }));
+check("staff reply during an open follow-up is answered", outbox.at(-1)!.to.startsWith(SANA) && /FAKE_REPLY/.test(outbox.at(-1)!.body));
 await enqueue("ops", msg({ chatId: `${OWNER}@s.whatsapp.net`, from: OWNER, body: "what is open today?" }));
 check("owner private message gets an answer", sent(OWNER, /FAKE_REPLY/));
 const b2 = outbox.length;
@@ -86,6 +93,13 @@ const b7 = outbox.length;
 await enqueue("ops", msg({ chatId: `${OWNER}@s.whatsapp.net`, from: OWNER, fromMe: true, source: "mobile", body: "who is waiting?" }));
 check("owner can command the agent from their own 'message yourself' chat", outbox.length === b7 + 1 && outbox.at(-1)!.to.startsWith(OWNER));
 const { config: cfg } = await import("../src/config.ts");
+const days = cfg.workingHours.days; cfg.workingHours.days = [];
+const b9 = outbox.length;
+const queued = await tools(ot, "create_task").run({ assignee: "Ali", text: "Night task" });
+check("task created outside office hours is held, not sent", /when the office opens/.test(queued) && outbox.length === b9);
+cfg.workingHours.days = days;
+await ops.checkTasks();
+check("held task is sent when the office opens", sent(ALI, /Task from Boss \(#\d+\)\nNight task/) && get("SELECT pings FROM tasks WHERE text='Night task'")?.pings === 0);
 cfg.ops.monitorGroups = ["Acme", G2];
 await enqueue("ops", msg({ chatId: "120363000000000077@g.us", chatName: "La familia", from: "447700900077", body: "dinner at 8?" }));
 check("groups outside the watch list are not stored or tracked", !get("SELECT 1 x FROM messages WHERE chat_id='120363000000000077@g.us'") && !get("SELECT 1 x FROM pending WHERE chat_id='120363000000000077@g.us'"));
