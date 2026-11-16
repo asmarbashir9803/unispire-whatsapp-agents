@@ -37,6 +37,9 @@ export function enqueue(channel: Channel, m: Incoming) {
   return next;
 }
 
+// Counters since start, shown on /health so you can see that the provider is delivering (no message content).
+const stats = { webhookCalls: 0, messagesReceived: 0, lastWebhookAt: null as string | null };
+
 const send = (res: http.ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
@@ -45,7 +48,7 @@ const send = (res: http.ServerResponse, status: number, body: unknown) => {
 export const server = http.createServer(async (req, res) => {
   try {
     const path = new URL(req.url ?? "/", "http://x").pathname;
-    if (req.method === "GET" && path === "/health") return send(res, 200, { ok: true });
+    if (req.method === "GET" && path === "/health") return send(res, 200, { ok: true, dryRun: env.dryRun, ...stats });
     if (req.method !== "POST") return send(res, 404, { error: "not found" });
 
     // WhatsApp provider webhook: /webhooks/whapi/<ops|sales>/<WEBHOOK_SECRET>
@@ -54,7 +57,10 @@ export const server = http.createServer(async (req, res) => {
       if (!env.webhookSecret || !safeEqual(hook[2], env.webhookSecret)) return send(res, 401, { error: "unauthorized" });
       const body = JSON.parse(await readBody(req));
       send(res, 200, { ok: true }); // acknowledge first; the provider retries slow webhooks
+      stats.webhookCalls++;
+      stats.lastWebhookAt = new Date().toISOString();
       for (const raw of Array.isArray(body?.messages) ? body.messages : []) {
+        stats.messagesReceived++;
         const m = parseIncoming(raw);
         if (m) void enqueue(hook[1] as Channel, m);
       }
