@@ -5,7 +5,7 @@ Two AI agents on two WhatsApp numbers, in one small Node service.
 | Agent | Number | What it does |
 |---|---|---|
 | **Operations** (`src/ops.ts`) | "ops" number, added to every customer group | Reads all group messages. If a client waits longer than the limit, it privately reminds the responsible team member, then alerts you. Takes your instructions by private message, turns them into tasks, chases the team, and sends you a daily summary. It never writes to customers. |
-| **Sales** (`src/sales.ts`) | "sales" number, one-to-one chats | Answers prospects, qualifies them, follows up when they go quiet (day 1, 3, 7), and hands over to a consultant when they want to proceed, pay, negotiate or talk to a person. Website enquiries are contacted automatically. |
+| **Sales** (`src/sales.ts`) | "sales" number, one-to-one chats | Picks up people who message after filling in the ad lead form, collects what the team needs for pricing (nationality, visas, activity, setup type), labels interested clients, answers prospects, qualifies them, follows up when they go quiet (day 1, 3, 7), and hands over to a consultant when they want to proceed, pay, negotiate or talk to a person. Website enquiries are contacted automatically. |
 
 ## What you need
 1. **Two WhatsApp numbers** (WhatsApp Business app is fine). Use dedicated numbers, not your personal one.
@@ -53,6 +53,7 @@ Start with `DRY_RUN=1` in `.env` to watch what it would send (in the logs) befor
   or `customer_group` (tags the team member inside the customer group, visible to the client).
 - `sales.replyTo`: `leads` (default) means the sales agent only talks to people it contacted first, through a website
   enquiry or your instruction; everyone else writing to the sales number is left alone. `everyone` answers all private chats.
+- `sales.interestedLabel`: the WhatsApp Business label the sales agent puts on a chat when the client shows interest.
 - `team[].ids`: WhatsApp sometimes shows a group member under a private id instead of their phone number. If a
   team member's group replies are being counted as client messages, add that id here.
 

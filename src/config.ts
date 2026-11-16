@@ -35,6 +35,8 @@ export interface Config {
   sales: {
     /** "leads": only talk to people the agent contacted first (website enquiry or the owner's instruction). "everyone": answer anyone who writes to the sales number. */
     replyTo?: "leads" | "everyone";
+    /** WhatsApp Business label put on a chat when the client shows interest. */
+    interestedLabel?: string;
     agentName: string;
     handoffTo: string;
     followUpDays: number[];

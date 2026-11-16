@@ -59,3 +59,27 @@ export function parseIncoming(m: any): Incoming | null {
     ts: Number(m.timestamp) || now(), isGroup: String(m.chat_id).endsWith("@g.us"),
   };
 }
+
+const labelIds = new Map<string, string>();
+
+/** Put a WhatsApp Business label (by its name) on a chat. Returns false if the label does not exist or the call fails. */
+export async function addLabel(channel: Channel, chatId: string, labelName: string) {
+  if (env.dryRun) { console.log(`[dry-run ${channel}] label "${labelName}" -> ${chatId}`); return true; }
+  try {
+    const headers = { authorization: `Bearer ${tokenFor(channel)}` };
+    const key = `${channel}:${labelName.toLowerCase()}`;
+    if (!labelIds.has(key)) {
+      const list: any = await (await fetch("https://gate.whapi.cloud/labels", { headers, signal: AbortSignal.timeout(30_000) })).json();
+      // WhatsApp pads some label names with invisible characters, so compare on letters and digits only.
+      const norm = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+      const found = (Array.isArray(list) ? list : []).find((l) => norm(l.name ?? "") === norm(labelName));
+      if (!found) return false;
+      labelIds.set(key, String(found.id));
+    }
+    const res = await fetch(`https://gate.whapi.cloud/labels/${labelIds.get(key)}/${chatId}`, { method: "POST", headers, signal: AbortSignal.timeout(30_000) });
+    return res.ok;
+  } catch (e) {
+    console.error("addLabel failed:", e instanceof Error ? e.message : e);
+    return false;
+  }
+}

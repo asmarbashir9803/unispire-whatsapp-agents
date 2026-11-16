@@ -7,9 +7,39 @@ import { z } from "zod";
 import { config, digits, env, inWorkingHours, knowledge, memberByName, normalisePhone, now, nowText } from "./config.ts";
 import { all, get, recent, run, saveMessage } from "./db.ts";
 import { runAgent, tool, type ToolSpec, type Turn } from "./llm.ts";
-import { channelReady, toChatId, trySend, type Incoming } from "./whapi.ts";
+import { addLabel, channelReady, toChatId, trySend, type Incoming } from "./whapi.ts";
 
 const DAY = 86400;
+
+const FORM_KEYS: [RegExp, string][] = [
+  [/first name/i, "first_name"], [/last name/i, "last_name"], [/full name/i, "name"], [/whatsapp/i, "whatsapp"], [/phone|mobile/i, "phone"],
+  [/e-?mail/i, "email"], [/visa/i, "visas"], [/business activity/i, "business_activity"], [/type of business setup|business setup/i, "setup_type"],
+  [/planning to start|when are you/i, "timeline"], [/nationality/i, "nationality"],
+];
+
+/**
+ * Recognise the message a person sends after filling in the ad lead form: an intro line followed by
+ * "Question: answer" lines. Returns the answers, or null if this is not a form message.
+ */
+export function parseLeadForm(body: string): { name?: string; details: Record<string, string> } | null {
+  const details: Record<string, string> = {};
+  for (const line of body.split("\n")) {
+    const m = line.match(/^\s*(.{3,90}?)\??\s*:\s*(\S.*)$/);
+    if (!m) continue;
+    const key = FORM_KEYS.find(([re]) => re.test(m[1]))?.[1];
+    if (key && !details[key]) details[key] = m[2].trim();
+  }
+  if (Object.keys(details).length < 3) return null;
+  const name = details.name ?? [details.first_name, details.last_name].filter(Boolean).join(" ");
+  delete details.first_name; delete details.last_name; delete details.name;
+  return { name: name || undefined, details: { source: "lead form", ...details } };
+}
+
+/** A phone number to show staff: chat ids are sometimes private WhatsApp ids rather than numbers. */
+function leadPhone(lead: Record<string, any>) {
+  const d = JSON.parse(lead.details ?? "{}");
+  return d.whatsapp ?? d.phone ?? (String(lead.chat_id).endsWith("@lid") ? "number not known" : `+${digits(lead.chat_id)}`);
+}
 
 function ensureLead(chatId: string, name?: string) {
   run("INSERT OR IGNORE INTO leads (chat_id, name, created_ts) VALUES (?,?,?)", chatId, name ?? null, now());
@@ -29,7 +59,13 @@ export async function handleSales(m: Incoming, live: boolean) {
   if (m.fromMe && m.source === "api") return; // our own sends echoed back
 
   const known = get("SELECT 1 x FROM leads WHERE chat_id=?", m.chatId);
-  if (!known && (config.sales.replyTo ?? "leads") === "leads") return; // not one of the agent's leads: leave the chat alone, keep nothing
+  if (!known && (config.sales.replyTo ?? "leads") === "leads") {
+    // Not one of the agent's leads. Take it on only if this is a lead-form message; otherwise leave the chat alone and keep nothing.
+    const form = m.fromMe ? null : parseLeadForm(m.body);
+    if (!form) return;
+    ensureLead(m.chatId, form.name || m.fromName || undefined);
+    run("UPDATE leads SET details=json_patch(details, ?) WHERE chat_id=?", JSON.stringify(form.details), m.chatId);
+  }
 
   if (m.fromMe) {
     // A person replied from the sales phone or WhatsApp Web: record it and keep the agent quiet for a while.
@@ -45,7 +81,7 @@ export async function handleSales(m: Incoming, live: boolean) {
   run("UPDATE leads SET last_in_ts=?, followups_sent=0 WHERE chat_id=?", m.ts, m.chatId);
   if (!live || lead.status === "stopped") return;
   if (lead.status === "handoff") {
-    await notifyStaff(`💬 ${lead.name ?? digits(m.chatId)} (handed over to you) wrote on the sales number:\n"${m.body.slice(0, 500)}"`);
+    await notifyStaff(`💬 ${lead.name ?? leadPhone(lead)} (handed over to you) wrote on the sales number:\n"${m.body.slice(0, 500)}"`);
     return;
   }
   if (lead.paused_until > now()) return;
@@ -78,7 +114,9 @@ async function fire(chatId: string) {
 const salesPrompt = () => `You are ${config.sales.agentName}, the AI sales assistant at Unispire Business Hub, a business-setup consultancy in Dubai. You talk to prospective clients on WhatsApp on behalf of ${config.owner.name}'s team. Your job is to help each person work out what they need, answer their questions, and move them to the next concrete step, which is usually a consultation or a written quote from a consultant.
 
 How to work a conversation
-- Find out what they are trying to do: the business activity, mainland or free zone (or unsure), how many visas, how many shareholders, when they want to start, and whether they are already in the UAE. Ask one thing at a time and only what you do not already know.
+- Most people reach you after filling in the company's enquiry form; their first message then lists their answers. Open by telling them the team received their enquiry to start their business setup in the UAE, and use what the form already says instead of asking again.
+- The team prices each setup from four facts, so your first aim is to collect whichever of these are missing or vague: the client's nationality, whether they need UAE visas and how many, which business activity they will run (a form answer of "Other" or a broad word like "Trading" needs one follow-up to pin down), and free zone or mainland. Tell them briefly that these let the team prepare an accurate price. Ask one thing at a time.
+- As soon as the client replies positively or engages with your questions, call mark_interested. Once you have nationality, visas, activity and setup type, use handoff with a summary so a consultant can send the pricing, and tell the client the pricing is being prepared.
 - Answer questions from the company information below. That section is the only source for prices, timelines, package contents and promises. If the answer is not there, say a consultant will confirm it and offer to arrange that; a wrong figure costs the company a client's trust and can create a commitment it cannot keep.
 - Government approvals, bank account opening and visa outcomes are decided by the authorities. Describe the usual process; never guarantee an outcome or a date.
 - When someone goes quiet, your follow-ups should add something (an answer to an open question, a next step, a useful fact), not just ask whether they are still interested.
@@ -104,7 +142,7 @@ function salesTools(chatId: string, state: { followupSet: boolean }): ToolSpec[]
       name: "update_lead",
       description: "Save facts learned about this prospect. Call it whenever the client tells you something new; fields you omit are left unchanged.",
       schema: z.object({
-        name: z.string().optional(), business_activity: z.string().optional(), setup_type: z.string().optional().describe("mainland, free zone, offshore, or unsure"),
+        name: z.string().optional(), nationality: z.string().optional(), business_activity: z.string().optional(), setup_type: z.string().optional().describe("mainland, free zone, offshore, or unsure"),
         visas: z.string().optional(), shareholders: z.string().optional(), timeline: z.string().optional(), location: z.string().optional().describe("where the client is now"),
         budget: z.string().optional(), notes: z.string().optional().describe("anything else a consultant should know"),
       }),
@@ -114,6 +152,20 @@ function salesTools(chatId: string, state: { followupSet: boolean }): ToolSpec[]
         const details = { ...JSON.parse(lead.details), ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v)) };
         run("UPDATE leads SET details=?, name=coalesce(?, name) WHERE chat_id=?", JSON.stringify(details), name ?? null, chatId);
         return "Saved.";
+      },
+    }),
+    tool({
+      name: "mark_interested",
+      description: "Put this client on the company's Interested Customers list in WhatsApp and tell the team. Call it once, the first time the client shows real interest: a positive reply, answering your questions, or asking about price or next steps. Not for people who say they are not interested or who wrote by mistake.",
+      schema: z.object({ why: z.string().describe("One line: what the client said that shows interest") }),
+      run: async ({ why }) => {
+        const lead = get("SELECT * FROM leads WHERE chat_id=?", chatId)!;
+        if (JSON.parse(lead.details).interested) return "Already on the interested list.";
+        run("UPDATE leads SET details=json_set(details, '$.interested', json('true')) WHERE chat_id=?", chatId);
+        const label = config.sales.interestedLabel ?? "Interested Customers";
+        const labelled = await addLabel("sales", chatId, label);
+        await notifyStaff(`⭐ *Interested client*: ${lead.name ?? "Client"} (${leadPhone(lead)})\n${why}\nKnown so far: ${lead.details}${labelled ? "" : `\n(Could not add the "${label}" label in WhatsApp; please add it by hand.)`}`);
+        return labelled ? "Added to the interested list; the team has been told." : "The team has been told, but the WhatsApp label could not be added.";
       },
     }),
     tool({
@@ -134,7 +186,7 @@ function salesTools(chatId: string, state: { followupSet: boolean }): ToolSpec[]
       run: async ({ reason, summary }) => {
         const lead = get("SELECT * FROM leads WHERE chat_id=?", chatId)!;
         run("UPDATE leads SET status='handoff', next_followup_ts=NULL WHERE chat_id=?", chatId);
-        await notifyStaff(`🤝 *Sales handover*: ${lead.name ?? "Client"} (+${digits(chatId)})\nWhy: ${reason}\n${summary}\nDetails: ${lead.details}\n\nReply to them from the sales number; the agent has stopped in that chat.`);
+        await notifyStaff(`🤝 *Sales handover*: ${lead.name ?? "Client"} (${leadPhone(lead)})\nWhy: ${reason}\n${summary}\nDetails: ${lead.details}\n\nReply to them from the sales number; the agent has stopped in that chat.`);
         return `Handed over. ${config.sales.handoffTo} has been notified.`;
       },
     }),

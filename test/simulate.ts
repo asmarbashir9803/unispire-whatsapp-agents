@@ -153,6 +153,16 @@ await enqueue("sales", msg({ chatId: "971551234567@s.whatsapp.net", from: "97155
 check("leads-only: a contacted client's reply is answered", outbox.at(-1)!.to === "971551234567@s.whatsapp.net" && outbox.at(-1)!.channel === "sales");
 check("invalid number is refused", /not a valid phone/.test(await tools(ops.ownerTools(), "contact_client").run({ phone: "12" })));
 check("list_leads shows the new lead", /Hassan \+971551234567 \[active\]/.test(await tools(ops.ownerTools(), "list_leads").run({})));
+const FORM = "Hello! I filled out your form and would like to know more about your business.\n\nEmail: b@example.com\nPhone number: +971500001111\nFirst name: Bashir\nLast name: Ahmed\nWhatsApp number: +971500001111\nWhen are you planning to start your UAE business?: Immediately\nWhat type of business setup are you looking for?: Free Zone Company\nHow many UAE visas do you require?: 1 Visa\nWhich business activity are you planning to start?: Trading";
+const LID = "198251529695401@lid";
+await enqueue("sales", msg({ chatId: LID, from: LID, fromName: "Bashir Ahmed", body: FORM }));
+const fl = get("SELECT * FROM leads WHERE chat_id=?", LID);
+const fd = JSON.parse(fl?.details ?? "{}");
+check("lead-form message starts a chat automatically, even in leads-only mode", outbox.at(-1)!.to === LID && outbox.at(-1)!.channel === "sales");
+check("form answers are saved on the lead", fl?.name === "Bashir Ahmed" && fd.visas === "1 Visa" && fd.setup_type === "Free Zone Company" && fd.business_activity === "Trading" && fd.timeline === "Immediately" && fd.whatsapp === "+971500001111");
+const AR = "مرحبًا! لقد قمتُ بملء النموذج الخاص بك\n\nHow many UAE visas do you require?: 1 Visa\nWhich business activity are you planning to start?: Other\nPhone number: +971500002222\nFirst name: Mohamed";
+check("form is recognised when the intro is in Arabic", sales.parseLeadForm(AR)?.details.business_activity === "Other");
+check("ordinary messages are not mistaken for a form", sales.parseLeadForm("Hi, my name: Ali. Call me") === null && sales.parseLeadForm("Hello Good Afternoon") === null);
 cfg.sales.replyTo = "everyone";
 
 // ---- website enquiry ----
