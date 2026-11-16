@@ -1,0 +1,34 @@
+services:
+  agents:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /data/data.sqlite
+      CONFIG_PATH: /config/config.json
+      PORT: "8787"
+    # Reachable only from the server itself until a public HTTPS address is set up in front of it.
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - data:/data
+      - ./config.json:/config/config.json:ro
+      - ./knowledge.md:/app/knowledge.md:ro
+    # Joins the portal's network so its Caddy can reach this service as "wa-agents" (HTTPS for agents.unispire.ae).
+    networks:
+      default:
+      portal:
+        aliases: [wa-agents]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  data:
+
+networks:
+  portal:
+    name: unispireportal_default
+    external: true
