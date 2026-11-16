@@ -38,6 +38,8 @@ Start with `DRY_RUN=1` in `.env` to watch what it would send (in the logs) befor
   - "Ask Ali to send the trade licence draft to Acme by tomorrow"
   - "Make Sana responsible for the Beta FZ group"
 - **If the ops number is your own number**, write your instructions in WhatsApp's "message yourself" chat instead.
+- **To start a client chat**, tell the ops agent: "send the enquiry message to +971 55 123 4567, Hassan, wants a free zone
+  licence with 2 visas". The sales agent messages them from the sales number and handles their replies.
 - **Team members** reply to the ops number privately: "task 4 is done, sent by email". You are told straight away.
 - **To take over a sales chat**, just reply from the sales phone. The agent goes quiet in that chat for
   `humanTakeoverHours`. After a handover it stays out until you change the lead's status.
@@ -49,6 +51,8 @@ Start with `DRY_RUN=1` in `.env` to watch what it would send (in the logs) befor
 - `ops.escalateAfterMinutes`: when you are alerted if there is still no reply.
 - `ops.nudgeWhere`: `dm` (private reminder, default), `team_group` (your internal team group, set `teamGroupId`),
   or `customer_group` (tags the team member inside the customer group, visible to the client).
+- `sales.replyTo`: `leads` (default) means the sales agent only talks to people it contacted first, through a website
+  enquiry or your instruction; everyone else writing to the sales number is left alone. `everyone` answers all private chats.
 - `team[].ids`: WhatsApp sometimes shows a group member under a private id instead of their phone number. If a
   team member's group replies are being counted as client messages, add that id here.
 

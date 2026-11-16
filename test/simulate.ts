@@ -142,6 +142,19 @@ const b6 = outbox.length;
 await enqueue("sales", msg({ chatId: L1, from: "447700900101", body: "?" }));
 check("stopped lead is never messaged", outbox.length === b6);
 
+// ---- leads-only mode and owner-started chats ----
+cfg.sales.replyTo = "leads";
+const b10 = outbox.length;
+await enqueue("sales", msg({ chatId: "447700900555@s.whatsapp.net", from: "447700900555", fromName: "Old client", body: "hi, about my renewal" }));
+check("leads-only: existing chats on the sales number are left alone and not stored", outbox.length === b10 && !get("SELECT 1 x FROM messages WHERE chat_id='447700900555@s.whatsapp.net'") && !get("SELECT 1 x FROM leads WHERE chat_id='447700900555@s.whatsapp.net'"));
+const started = await tools(ops.ownerTools(), "contact_client").run({ phone: "+971 55 123 4567", name: "Hassan", about: "Free zone licence, 2 visas" });
+check("owner can start a client chat: message goes from the sales number", /Sent to \+971551234567/.test(started) && outbox.at(-1)!.channel === "sales" && outbox.at(-1)!.to === "971551234567@s.whatsapp.net");
+await enqueue("sales", msg({ chatId: "971551234567@s.whatsapp.net", from: "971551234567", fromName: "Hassan", body: "Yes, I need 2 visas" }));
+check("leads-only: a contacted client's reply is answered", outbox.at(-1)!.to === "971551234567@s.whatsapp.net" && outbox.at(-1)!.channel === "sales");
+check("invalid number is refused", /not a valid phone/.test(await tools(ops.ownerTools(), "contact_client").run({ phone: "12" })));
+check("list_leads shows the new lead", /Hassan \+971551234567 \[active\]/.test(await tools(ops.ownerTools(), "list_leads").run({})));
+cfg.sales.replyTo = "everyone";
+
 // ---- website enquiry ----
 const r = await sales.handleEnquiry({ receivedAt: new Date().toISOString(), input: { kind: "enquiry", fullName: "Priya Shah", phone: "050 123 4567", email: "p@example.com", service: "Free zone setup", contactMethod: "whatsapp" } });
 check("website enquiry: UAE number normalised and first message sent", r.contacted && outbox.some((o) => o.channel === "sales" && o.to === "971501234567@s.whatsapp.net"));

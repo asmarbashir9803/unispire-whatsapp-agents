@@ -33,6 +33,8 @@ export interface Config {
     defaultAssignee: string;
   };
   sales: {
+    /** "leads": only talk to people the agent contacted first (website enquiry or the owner's instruction). "everyone": answer anyone who writes to the sales number. */
+    replyTo?: "leads" | "everyone";
     agentName: string;
     handoffTo: string;
     followUpDays: number[];

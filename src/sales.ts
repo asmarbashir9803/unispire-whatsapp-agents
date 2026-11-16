@@ -28,6 +28,9 @@ export async function handleSales(m: Incoming, live: boolean) {
   if (m.isGroup) return; // the sales agent only works one-to-one
   if (m.fromMe && m.source === "api") return; // our own sends echoed back
 
+  const known = get("SELECT 1 x FROM leads WHERE chat_id=?", m.chatId);
+  if (!known && (config.sales.replyTo ?? "leads") === "leads") return; // not one of the agent's leads: leave the chat alone, keep nothing
+
   if (m.fromMe) {
     // A person replied from the sales phone or WhatsApp Web: record it and keep the agent quiet for a while.
     if (saveMessage({ id: m.id, channel: "sales", chat_id: m.chatId, sender: "staff", sender_name: "Staff", role: "bot", body: m.body, ts: m.ts })) {
@@ -183,6 +186,25 @@ export async function checkFollowups() {
       `The client has not replied since your last message. Write follow-up ${n} of ${total}.${note ? ` Planned topic: ${note}.` : ""}${n === total ? " This is the last one: keep the door open without pressure." : ""}`);
     if (n === total) run("UPDATE leads SET status='cold', next_followup_ts=NULL WHERE chat_id=?", lead.chat_id);
   }
+}
+
+/** Start a conversation with a prospect on the owner's instruction. */
+export async function contactLead(input: { phone: string; name?: string; about?: string; instruction?: string }) {
+  const phone = normalisePhone(input.phone);
+  if (!phone) return `"${input.phone}" is not a valid phone number. Include the country code.`;
+  if (!channelReady("sales")) return "The sales WhatsApp number is not connected.";
+  const chatId = toChatId(phone);
+  const lead = ensureLead(chatId, input.name);
+  if (lead.status === "stopped") return `+${phone} asked not to be contacted, so nothing was sent.`;
+  if (input.about) run("UPDATE leads SET details=json_patch(details, ?) WHERE chat_id=?", JSON.stringify({ source: "added by owner", enquiry: input.about }), chatId);
+  if (lead.status !== "active") run("UPDATE leads SET status='active', paused_until=0 WHERE chat_id=?", chatId);
+  const before = get("SELECT count(*) c FROM messages WHERE channel='sales' AND chat_id=? AND role='bot'", chatId)!.c;
+  await replyToLead(chatId,
+    `${config.owner.name} asked you to message this person now. ${input.instruction ?? "They sent an enquiry about starting a business in the UAE. Write the first WhatsApp message: greet them by first name if known, say who you are, confirm the enquiry was received, refer to what they asked about, and ask the one question that best moves things forward."}`);
+  const after = get("SELECT count(*) c FROM messages WHERE channel='sales' AND chat_id=? AND role='bot'", chatId)!.c;
+  if (after === before) return `Could not send a message to +${phone}.`;
+  const last = recent("sales", chatId, 1)[0];
+  return `Sent to +${phone} from the sales number:\n"${last.body}"\nReplies from this person are now handled by the sales agent.`;
 }
 
 /** A new enquiry from the website form (the site's ENQUIRY_WEBHOOK_URL points here). */
